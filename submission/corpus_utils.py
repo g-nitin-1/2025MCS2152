@@ -8,7 +8,7 @@ replace it if your index needs a different loading strategy (e.g.
 streaming instead of loading everything into memory).
 """
 import json
-from typing import List, Tuple
+from typing import Iterator, List, Tuple
 
 
 def load_corpus(path: str) -> List[Tuple[str, str]]:
@@ -23,3 +23,19 @@ def load_corpus(path: str) -> List[Tuple[str, str]]:
             obj = json.loads(line)
             docs.append((obj["doc_id"], obj["text"]))
     return docs
+
+
+def stream_corpus(path: str) -> Iterator[Tuple[str, str]]:
+    """Yield (doc_id, text) pairs one at a time, in file order.
+
+    Same contract as load_corpus() without holding the whole corpus in
+    memory: the real collection is ~200MB of JSON on disk and several
+    times that as live Python strings, all of which is dead weight once a
+    document has been tokenised and folded into the postings.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            yield obj["doc_id"], obj["text"]

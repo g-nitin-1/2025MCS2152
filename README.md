@@ -162,6 +162,67 @@ conformance freeze (48 hours before the deadline — see
 └── .github/workflows/conformance.yml   # what runs on every push
 ```
 
+## This submission (2025MCS2152)
+
+### Reproducing the index and the leaderboard run
+
+```bash
+pip install -r requirements.txt
+python scripts/download_full_corpus.py          # -> data/full/ (beir/trec-covid, 171,332 docs)
+
+python -m harness.run_harness \
+  --corpus  data/full/corpus.jsonl \
+  --queries data/full/queries_dev.tsv \
+  --qrels   data/full/qrels_dev.txt \
+  --run-out runs/full_dev_run.trec \
+  --report-out runs/full_dev_report.json
+```
+
+Index build is deterministic: two independent builds of the same corpus
+produce a byte-identical `index.bin`.
+
+### Results on the released dev topics (50 topics)
+
+| Scorer | nDCG@10 | MAP@10 |
+|---|---|---|
+| Reference BM25, textbook k1=1.2 b=0.75 | 0.4279 | 0.0089 |
+| TF-IDF cosine (VSM) | 0.4433 | 0.0103 |
+| BM25, textbook k1=1.2 b=0.75 | 0.6307 | 0.0155 |
+| BM25, tuned k1=2.1 b=0.55 | 0.6619 | 0.0167 |
+| **Blend (submitted): BM25 + 0.5*coverage + 8.0*cosine** | **0.6808** | **0.0171** |
+
+MAP@10 is normalised by the true relevant count, which averages 493 per
+topic on this collection, so a perfect top-10 caps at ~0.021; 0.0171 is
+about 82% of the achievable maximum.
+
+Efficiency: index build 17.8s, load 1.2s, **index 15.8MB** on disk (from a
+199MB corpus), mean query latency 4.0ms.
+
+### Design summary
+
+- **Indexer** (`submission/indexer.py`): one zlib-compressed file. Doc-ids
+  delta-gapped then VByte-coded, term frequencies stored as `tf-1`,
+  vocabulary front-coded. Raw document text is not persisted — BM25 and
+  cosine need only term frequencies, document lengths, and collection
+  statistics. The VByte codec is vectorised over NumPy, so encoding ~12M
+  postings does not dominate the graded build time.
+- **Stemmer** (`submission/porter.py`): our own Porter (1980)
+  implementation, verified 23,531/23,531 against Porter's published test
+  vocabulary. Written out rather than taken from NLTK so the submission
+  needs nothing beyond `requirements.txt`.
+- **Scorers**: BM25 with tunable `k1`/`b` (`bm25.py`), Boolean AND/OR plus
+  TF-IDF cosine (`boolean_vsm.py`), and the submitted linear blend
+  (`custom_scorer.py`). All read the same index and the same tokenizer.
+- **Caches are never persisted.** IDF tables and document norms are
+  recomputed in `load_index()`. Index load time is not a graded component
+  but index bytes are, so recomputing is strictly cheaper than storing.
+- **Tuning** (`scripts/sweep.py`): all parameters were selected on the dev
+  topics only. `k1`/`b` were chosen by 5-fold cross-validation rather than
+  by the dev argmax — the grid peak (k1=2.2, b=0.55, 0.6636) is optimistic
+  by +0.0156 against the CV estimate of 0.6480 and won only 43 of 200
+  folds, so the submitted values are the centroid of the CV selection
+  distribution.
+
 ## Getting help
 
 Discussing high-level strategy with classmates is fine. Sharing code, a

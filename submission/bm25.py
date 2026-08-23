@@ -1,52 +1,91 @@
 """
-submission/bm25.py — Okapi BM25 ranking.
-
-Required component (assignment Section 4.1): "a BM25 implementation with
-tunable k1 and b." See the assignment background (Section 3) for the
-Robertson & Walker / Robertson & Zaragoza references this is based on.
-
-BM25 score for a query Q = q1...qn against document D:
+submission/bm25.py — Okapi BM25 (assignment Section 4.1, "a BM25
+implementation with tunable k1 and b").
 
     score(D, Q) = sum_i  IDF(qi) * ( tf(qi, D) * (k1 + 1) )
                                    / ( tf(qi, D) + k1 * (1 - b + b * |D| / avgdl) )
 
-A standard IDF variant (Robertson-Sparck Jones, +1-smoothed so it stays
-non-negative even for terms occurring in more than half the corpus):
+    IDF(qi)     = ln( (N - df(qi) + 0.5) / (df(qi) + 0.5) + 1 )
 
-    IDF(qi) = ln( (N - df(qi) + 0.5) / (df(qi) + 0.5) + 1 )
+k1 and b are parameters of `score()`, never constants — they are swept on
+the dev set for the report, and the tuned values live in
+`submission/params.py` so a sweep changes one file and nothing else.
 
-where:
-    N        = number of documents in the corpus
-    df(qi)   = number of documents containing qi
-    tf(qi,D) = term frequency of qi in D
-    |D|      = length of D in tokens
-    avgdl    = average document length across the corpus
+The sum is over query term *occurrences*, so a term repeated in the query
+contributes once per occurrence; that is the `qtf` multiplier below.
 
-k1 (typically 1.2-2.0) controls term-frequency saturation; b (in [0, 1])
-controls document-length normalisation strength. Both must be exposed as
-parameters, not hard-coded — you need to sweep them for your report
-(assignment Section 8, "parameter search procedure for k1, b").
+Each term's postings list is scored as a whole NumPy slice rather than a
+Python loop over postings, which is what keeps mean query latency (a
+graded component) in the low milliseconds on a 171K-document corpus.
 """
-from typing import List, Tuple
+from collections import Counter
+from typing import List, Optional, Tuple
 
-from submission.indexer import InvertedIndex
+import numpy as np
+
+from submission.indexer import InvertedIndex, tokenize
+
+_INDEX: Optional[InvertedIndex] = None
+_IDF: Optional[np.ndarray] = None      # per term-id, the BM25 IDF above
+_LEN_RATIO: Optional[np.ndarray] = None  # per doc, |D| / avgdl
 
 
 def build(index: InvertedIndex) -> None:
-    """Optional: precompute anything BM25-specific (e.g. cached IDF values
-    per term) from the InvertedIndex built in indexer.py.
+    """Precompute per-term IDF and per-document length ratios.
 
-    Call this from retrieve.load_index(), not retrieve.build_index() —
-    the harness runs those two in separate processes, so any cache this
-    creates only needs to exist in the process that also calls
-    retrieve(). If you want a precomputed cache to persist across the
-    build/load boundary too, write it out via InvertedIndex.save() instead
-    (it then counts toward your index-size score) and rebuild the cache
-    here from the loaded index."""
-    raise NotImplementedError
+    Called from retrieve.load_index(). Both are pure functions of what the
+    index already persists, so neither is written to disk — recomputing
+    them here costs a few milliseconds of (ungraded) load time instead of
+    bytes against the graded index-size score.
+    """
+    global _INDEX, _IDF, _LEN_RATIO
+    _INDEX = index
+    df = np.diff(index.offsets).astype(np.float64)
+    N = float(index.N)
+    _IDF = np.log((N - df + 0.5) / (df + 0.5) + 1.0)
+    avgdl = index.avg_doc_len or 1.0
+    _LEN_RATIO = index.doc_len.astype(np.float32) / avgdl
+
+
+def accumulate(query: str, k1: float = 1.2, b: float = 0.75,
+               out: Optional[np.ndarray] = None) -> np.ndarray:
+    """Return the dense BM25 score vector over all documents.
+
+    Exposed separately from score() so custom_scorer.py can blend the raw
+    signal without paying for a top-k selection it would throw away.
+    """
+    assert _INDEX is not None and _IDF is not None and _LEN_RATIO is not None
+    index = _INDEX
+    scores = np.zeros(index.N, dtype=np.float32) if out is None else out
+    norm = (1.0 - b) + b * _LEN_RATIO
+    for term, qtf in Counter(tokenize(query)).items():
+        ti = index.vocab.get(term)
+        if ti is None:
+            continue
+        s, e = index.offsets[ti], index.offsets[ti + 1]
+        docs = index.post_docs[s:e]
+        tf = index.post_tfs[s:e].astype(np.float32)
+        contrib = (_IDF[ti] * qtf) * (tf * (k1 + 1.0)) / (tf + k1 * norm[docs])
+        scores[docs] += contrib
+    return scores
+
+
+def top_k(scores: np.ndarray, k: int) -> List[Tuple[str, float]]:
+    """Top-k from a dense score vector, ties broken by ascending internal
+    doc-id so the ranking is deterministic (the interface contract
+    requires the same query to return the same ranking every time)."""
+    assert _INDEX is not None
+    nz = np.flatnonzero(scores)
+    if nz.size == 0:
+        return []
+    if nz.size > k:
+        part = np.argpartition(-scores[nz], k)[:k]
+        nz = nz[part]
+    order = np.lexsort((nz, -scores[nz]))
+    ids = _INDEX.doc_ids
+    return [(ids[d], float(scores[d])) for d in nz[order]]
 
 
 def score(query: str, k: int, k1: float = 1.2, b: float = 0.75) -> List[Tuple[str, float]]:
-    """Return up to k (doc_id, score) pairs for `query`, BM25-ranked,
-    highest score first."""
-    raise NotImplementedError
+    """Up to k (doc_id, score) pairs for `query`, BM25-ranked, best first."""
+    return top_k(accumulate(query, k1=k1, b=b), k)
