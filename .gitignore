@@ -5,6 +5,13 @@ runs/
 data/full/
 .DS_Store
 *.egg-info/
+
+# Compiled extension build artefacts. The .pyx source and setup.py are
+# tracked; the generated C and the .so are platform- and Python-ABI-
+# specific, so they are rebuilt by the Dockerfile / CI, never committed.
+build/
+submission/_fasttok.c
+*.so
 *.aux
 *.out
 *.log

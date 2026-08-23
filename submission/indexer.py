@@ -53,38 +53,16 @@ INDEX_FILENAME = "index.bin"
 
 _MAGIC = b"IDX1"
 
-# A compact, standard English stoplist. Deliberately does NOT strip
-# negations or "no"/"not" -- see the report's error analysis; on a
-# question-style topic set ("what causes death from Covid-19") the
-# function words carry no discriminative signal, but polarity words
-# occasionally do.
-STOPWORDS = frozenset("""
-a about above after again against all am an and any are as at be because
-been before being below between both but by can cannot could did do does
-doing down during each few for from further had has have having he her
-here hers herself him himself his how i if in into is it its itself me
-more most my myself of off on once only or other ought our ours ourselves
-out over own same she should so some such than that the their theirs them
-themselves then there these they this those through to too under until up
-very was we were what when where which while who whom why with would you
-your yours yourself yourselves
-""".split())
-
-
-def _alnum_tokens(text: str) -> List[str]:
-    """Lowercase alphanumeric runs, without the regex engine.
-
-    str.translate + split is markedly faster than re.findall over ~200MB
-    of corpus text, and index build time is a graded component.
-    """
-    return text.lower().translate(_TRANSLATION).split()
+# Re-exported so existing references to indexer.STOPWORDS keep working;
+# the list itself lives in stopwords.py so the compiled tokenizer can share
+# it without an import cycle.
+from submission.stopwords import STOPWORDS  # noqa: E402,F401
 
 
 def _build_translation_table() -> Dict[int, Optional[str]]:
     table: Dict[int, Optional[str]] = {}
     for cp in range(256):
-        ch = chr(cp)
-        if not ch.isalnum():
+        if not chr(cp).isalnum():
             table[cp] = " "
     return table
 
@@ -92,15 +70,45 @@ def _build_translation_table() -> Dict[int, Optional[str]]:
 _TRANSLATION = str.maketrans(_build_translation_table())
 
 
-def tokenize(text: str) -> List[str]:
-    """The shared tokenizer: lowercase -> alphanumeric -> stopword removal
-    -> Porter stem. Every scorer that reads this index must use it."""
+def _py_tokenize(text: str) -> List[str]:
+    """Reference tokenizer: lowercase -> alphanumeric runs -> stopword
+    removal -> Porter stem. Used directly when the compiled tokenizer is
+    not available, and as the parity oracle for it in tests."""
     out = []
-    for tok in _alnum_tokens(text):
+    for tok in text.lower().translate(_TRANSLATION).split():
         if tok in STOPWORDS or len(tok) < 2:
             continue
         out.append(stem(tok))
     return out
+
+
+def _py_term_counts(text: str) -> Dict[str, int]:
+    return dict(Counter(_py_tokenize(text)))
+
+
+# The hot loop is compiled if the extension was built (see setup.py, and
+# the Dockerfile / CI workflow that run it). This is a pure speed
+# optimisation for a graded component: the compiled tokenizer is asserted
+# byte-identical to _py_tokenize in tests/test_tokenizer_parity.py, so the
+# index and every score are the same either way. If the build was skipped,
+# or Cython/a compiler was unavailable, or the .so was built for a
+# different Python ABI, the import simply fails and we fall back.
+try:
+    from submission._fasttok import term_counts as _term_counts, tokenize as _tokenize
+    USING_COMPILED_TOKENIZER = True
+except ImportError:  # pragma: no cover - depends on whether the build ran
+    _tokenize, _term_counts = _py_tokenize, _py_term_counts
+    USING_COMPILED_TOKENIZER = False
+
+
+def tokenize(text: str) -> List[str]:
+    """The shared tokenizer every scorer and the index must agree on."""
+    return _tokenize(text)
+
+
+def term_counts(text: str) -> Dict[str, int]:
+    """{term: frequency} for one document, in a single pass."""
+    return _term_counts(text)
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +272,10 @@ class InvertedIndex:
         doc_len = array("i")
 
         for internal_id, (doc_id, text) in enumerate(corpus):
-            tokens = tokenize(text)
+            counts = term_counts(text)
             doc_ids.append(doc_id)
-            doc_len.append(len(tokens))
-            for term, tf in Counter(tokens).items():
+            doc_len.append(sum(counts.values()))
+            for term, tf in counts.items():
                 bucket = acc.get(term)
                 if bucket is None:
                     bucket = acc[term] = array("i")

@@ -20,6 +20,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Build the compiled tokenizer extension (submission/_fasttok.pyx) here,
+# at image-build time, exactly as docs/SUBMISSION_INTERFACE.md
+# ("Compiled extensions") requires: network is still available, and a
+# one-time compile must not be charged against the index-build-time
+# efficiency metric by happening inside build_index().
+#
+# This step is an optimisation, not a requirement. If it is removed, or
+# fails, submission/indexer.py falls back to its pure-Python tokenizer and
+# produces a byte-identical index -- see tests/test_tokenizer_parity.py.
+RUN python setup.py build_ext --inplace
+
 # Default command: run the interface conformance + smoke-test suite
 # against the toy set. Course staff override CMD to point at the real
 # corpus/topics/qrels for scoring.
