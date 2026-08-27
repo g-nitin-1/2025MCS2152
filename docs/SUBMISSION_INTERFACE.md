@@ -113,6 +113,11 @@ a C/C++ extension you compile yourself and call into. `Cython` is already
 in `requirements.txt` for this; `pybind11` works too if you add it
 yourself.
 
+- **Provide `submission/setup.py`.** If you use a compiled extension,
+  define it in this file. The provided Dockerfile, CI workflow, and course
+  staff's grading image detect the file and run
+  `python setup.py build_ext --inplace` from inside `submission/`.
+
 - **Build it at image-build time, not inside `build_index()`.** The
   provided `Dockerfile` (and course staff's `Dockerfile.grading`, kept in
   lockstep with it) includes a C/C++ toolchain (`build-essential`)

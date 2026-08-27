@@ -8,8 +8,8 @@ course staff actually use it (and don't use it) when grading.
 
 ## What the Dockerfile is for
 
-It pins the exact Python version and dependency versions your submission
-runs under, so "works on my machine" cannot cause a harness failure. It
+It defines the container Python version and installs the dependency ranges
+declared in `requirements.txt`, reducing environment-specific failures. It
 also includes a C/C++ toolchain (`build-essential`), so if you compile
 part of your submission as a Cython or pybind11 extension (see
 `docs/SUBMISSION_INTERFACE.md`, "Compiled extensions"), it builds

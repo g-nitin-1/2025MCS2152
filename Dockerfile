@@ -1,7 +1,5 @@
-# Pinned, minimal image so the grading harness runs your submission
-# identically regardless of local setup (assignment Section 5,
-# "Containerisation"). Course staff run every submission through this
-# same image at grading time.
+# Minimal container image for reproducible local and CI execution
+# (assignment Section 5, "Containerisation").
 FROM python:3.11-slim
 
 WORKDIR /repo
@@ -20,16 +18,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Build the compiled tokenizer extension (submission/_fasttok.pyx) here,
-# at image-build time, exactly as docs/SUBMISSION_INTERFACE.md
-# ("Compiled extensions") requires: network is still available, and a
-# one-time compile must not be charged against the index-build-time
-# efficiency metric by happening inside build_index().
+# Build the optional compiled tokenizer from the location and working
+# directory used by CI and grading. A one-time compile must not be charged
+# against the index-build-time metric by happening inside build_index().
 #
 # This step is an optimisation, not a requirement. If it is removed, or
 # fails, submission/indexer.py falls back to its pure-Python tokenizer and
 # produces a byte-identical index -- see tests/test_tokenizer_parity.py.
-RUN python setup.py build_ext --inplace
+RUN if [ -f submission/setup.py ]; then \
+        cd submission && python setup.py build_ext --inplace; \
+    fi
 
 # Default command: run the interface conformance + smoke-test suite
 # against the toy set. Course staff override CMD to point at the real

@@ -1,6 +1,7 @@
+# distutils: language = c++
 # cython: language_level=3, boundscheck=False, wraparound=False, initializedcheck=False
 """
-submission/_fasttok.pyx — the tokenizer's hot loop, compiled.
+submission/_fasttok.pyx — the tokenizer's hot loop, compiled as C++.
 
 Why this file exists
 --------------------
@@ -35,6 +36,10 @@ replicates that function exactly, including its two subtle behaviours:
     part of a token, exactly as the pure-Python version's 256-entry
     translation table does by leaving them untouched.
 tests/test_tokenizer_parity.py asserts this over the real corpus.
+
+The evaluator builds this module from inside ``submission/`` using
+``python setup.py build_ext --inplace``. No generated C file or compiled
+shared object is part of the submission archive.
 """
 from submission.porter import stem as _porter_stem
 from submission.stopwords import STOPWORDS

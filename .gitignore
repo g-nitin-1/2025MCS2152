@@ -11,6 +11,7 @@ data/full/
 # specific, so they are rebuilt by the Dockerfile / CI, never committed.
 build/
 submission/_fasttok.c
+submission/_fasttok.cpp
 *.so
 *.aux
 *.out
